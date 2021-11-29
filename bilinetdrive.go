@@ -15,6 +15,7 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,21 +23,22 @@ import (
 	"time"
 )
 
-var (
+const (
 	nodeImageWidth     = 512
 	nodeImageMaxHeight = 9000
 	fileImageWidth     = 512
 	fileImageMaxHeight = 512
-	retryTimes         = 10
-	uploadThreads      = 16
-	downloadThreads    = 32
 )
 
 var (
-	SESSDATA   = ""
-	Path       = [][]string{}
-	UserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
-	httpClient = http.Client{Timeout: 5 * time.Second}
+	uploadThreads   = 16
+	downloadThreads = 32
+	retryTimes      = 10
+	retryWaitTime   = time.Millisecond * 500
+	SESSDATA        = ""
+	Path            = [][]string{}
+	UserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+	httpClient      = http.Client{Timeout: time.Second * 5}
 )
 
 /*
@@ -53,7 +55,7 @@ type JobQueueStruct struct {
 
 type SafeDownloadMapStruct struct {
 	lock   *sync.Mutex
-	mapObj map[int][]byte
+	mapObj map[int64][]byte
 }
 
 type SafeUploadNodeStruct struct {
@@ -62,31 +64,31 @@ type SafeUploadNodeStruct struct {
 }
 
 func NotSetARootNodeYet() error {
-	return errors.New("Not set a root node yet")
+	return errors.New("not set a root node yet")
 }
 
 func PathDoesNotExist() error {
-	return errors.New("Path does not exists")
+	return errors.New("path does not exists")
 }
 
 func FolderDoesNotExist() error {
-	return errors.New("Folder does not exists")
+	return errors.New("folder does not exists")
 }
 
 func FileDoesNotExist() error {
-	return errors.New("File does not exists")
+	return errors.New("file does not exists")
 }
 
 func NotAFile() error {
-	return errors.New("Not A File")
+	return errors.New("not A File")
 }
 
 func NodeDoesNotExist() error {
-	return errors.New("Node does not exists")
+	return errors.New("node does not exists")
 }
 
 func NameExisted() error {
-	return errors.New("Name Existed")
+	return errors.New("name Existed")
 }
 
 func SetSESSDATA(sessdata string) { //要修改或上传必须要有
@@ -104,9 +106,8 @@ func DecodeImage(imageData *bytes.Buffer) (*bytes.Buffer, error) { //解码图�
 		return nil, err
 	}
 	dataBuffer := new(bytes.Buffer)
-	colorBuffer := make([]byte, 4)
 	pointColor := color.NRGBAModel.Convert(fileImage.At(fileImage.Bounds().Min.X, fileImage.Bounds().Min.Y)).(color.NRGBA)
-	colorBuffer = []byte{pointColor.R, pointColor.G, pointColor.B, pointColor.A}
+	colorBuffer := []byte{pointColor.R, pointColor.G, pointColor.B, pointColor.A}
 	num := uint32(binary.BigEndian.Uint32(colorBuffer))
 	var readLength uint32
 	for k := fileImage.Bounds().Min.Y; k < fileImage.Bounds().Max.Y; k++ {
@@ -140,23 +141,18 @@ loopOut:
 	return dataBuffer, nil
 }
 
-func EncodeImage(data *bytes.Buffer, imageWidth int, imageMaxHeight int, startPos int) (*bytes.Buffer, error) { //编码图像
+func EncodeImage(data *bytes.Buffer, imageWidth int, imageMaxHeight int) (*bytes.Buffer, error) { //编码图像
 	if imageWidth < 10 {
 		imageWidth = 10
 	}
 	if imageMaxHeight < 10 {
 		imageMaxHeight = 10
 	}
-	singleImageMaxSize := (imageWidth*imageMaxHeight - 1) * 4
+	var singleImageMaxSize int64 = (int64(imageWidth)*int64(imageMaxHeight) - 1) * 4
 	var buffer []byte
 
-	if startPos+singleImageMaxSize > data.Len() {
-		buffer = data.Bytes()[startPos:data.Len()]
-	} else {
-		buffer = data.Bytes()[startPos : startPos+singleImageMaxSize]
-	}
-	num := len(buffer)
-
+	buffer = data.Bytes()
+	num := int64(data.Len())
 	var imageHeight int
 	if num < singleImageMaxSize {
 		imageHeight = int(math.Ceil(float64(num+4) / float64(imageWidth*4)))
@@ -266,7 +262,7 @@ func PushImage(imageData *bytes.Buffer) (string, error) { //上传图片
 	}
 	if v, ok := jsonData["code"].(float64); ok {
 		if v != 0 {
-			return "", errors.New("Upload Failure: " + strconv.Itoa(int(v)) + " " + jsonData["message"].(string))
+			return "", errors.New("upload Failure: " + strconv.FormatInt(int64(v), 10) + " " + jsonData["message"].(string))
 		} else {
 			if v, ok := jsonData["data"].(map[string]interface{}); ok {
 				if url, ok := v["image_url"].(string); ok {
@@ -278,7 +274,7 @@ func PushImage(imageData *bytes.Buffer) (string, error) { //上传图片
 		}
 	}
 	runtime.GC()
-	return "", errors.New("Upload Failure: error json format")
+	return "", errors.New("upload Failure: error json format")
 }
 
 func DecodeNode(hash string) (map[string][]string, error) { //解码一个节点 nodeType
@@ -291,7 +287,7 @@ func DecodeNode(hash string) (map[string][]string, error) { //解码一个节点
 		if err != nil {
 			if errTimes <= retryTimes {
 				errTimes++
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(retryWaitTime)
 				runtime.GC()
 				continue
 			}
@@ -330,18 +326,18 @@ func CreateNode(nodeData map[string][]string) (string, error) { //创建一个�
 	singleImageMaxSize := (nodeImageWidth*nodeImageMaxHeight - 1) * 4
 	if compressedData.Len() > singleImageMaxSize {
 		runtime.GC()
-		return "", errors.New("Single node size is too big")
+		return "", errors.New("single node size is too big")
 	}
 
 	var hash string
 	errTimes := 0
 	for {
-		imageData, err := EncodeImage(compressedData, nodeImageWidth, nodeImageMaxHeight, 0)
+		imageData, err := EncodeImage(compressedData, nodeImageWidth, nodeImageMaxHeight)
 		hash, err = PushImage(imageData)
 		if err != nil {
 			if errTimes <= retryTimes {
 				errTimes++
-				time.Sleep(time.Millisecond * 500)
+				time.Sleep(retryWaitTime)
 				runtime.GC()
 				continue
 			}
@@ -565,7 +561,7 @@ func RenameNode(origin string, name string) error { //重命名当前目录下�
 	return nil
 }
 
-func GetFileLength(name string) (int, error) {
+func GetFileLength(name string) (int64, error) {
 	if len(Path) == 0 {
 		return 0, NotSetARootNodeYet()
 	}
@@ -578,31 +574,33 @@ func GetFileLength(name string) (int, error) {
 		return 0, NodeDoesNotExist()
 	}
 	if nodeData[name][0] == "1" {
-		return strconv.Atoi(nodeData[name][2])
+		return strconv.ParseInt(nodeData[name][2], 10, 64)
 	}
 	return 0, NotAFile()
 }
 
-func UploadProcessFileThread(nodeData *SafeUploadNodeStruct, data *bytes.Buffer, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //上传文件的多线程处理
+func UploadProcessDataThread(nodeData *SafeUploadNodeStruct, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //上传数据的多线程处理
 	for {
 		jobQueue.lock.Lock()
-		startPos := jobQueue.list.Front()
-		if startPos == nil {
+		count := jobQueue.list.Front()
+		if count == nil {
 			jobQueue.lock.Unlock()
 			break
 		}
-		jobQueue.list.Remove(startPos)
+		jobQueue.list.Remove(count)
+		data := jobQueue.list.Front()
+		jobQueue.list.Remove(data)
 		jobQueue.lock.Unlock()
 
 		var imageHash string
 		errTimes := 0
 		for {
-			image, err := EncodeImage(data, fileImageWidth, fileImageMaxHeight, startPos.Value.([]int)[1])
+			image, err := EncodeImage(data.Value.(*bytes.Buffer), fileImageWidth, fileImageMaxHeight)
 			imageHash, err = PushImage(image)
 			if err != nil {
 				if errTimes <= retryTimes {
 					errTimes++
-					time.Sleep(time.Millisecond * 500)
+					time.Sleep(retryWaitTime)
 					runtime.GC()
 					continue
 				}
@@ -613,14 +611,14 @@ func UploadProcessFileThread(nodeData *SafeUploadNodeStruct, data *bytes.Buffer,
 			break
 		}
 		nodeData.lock.Lock()
-		nodeData.mapObj[strconv.Itoa(startPos.Value.([]int)[0])] = []string{imageHash}
+		nodeData.mapObj[strconv.FormatInt(count.Value.(int64), 10)] = []string{imageHash}
 		nodeData.lock.Unlock()
 	}
 	runtime.GC()
 	threadsWaitGroup.Done()
 }
 
-func UploadFile(data *bytes.Buffer, name string) error { //上传文件到当前路径
+func UploadData(data *bytes.Buffer, name string) error { //上传数据到当前路径
 	if len(Path) == 0 {
 		runtime.GC()
 		return NotSetARootNodeYet()
@@ -639,19 +637,25 @@ func UploadFile(data *bytes.Buffer, name string) error { //上传文件到当前
 	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
 	jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
 	var threadsWaitGroup sync.WaitGroup
-	singleImageMaxSize := (fileImageWidth*fileImageMaxHeight - 1) * 4
-	nowStartPoint := 0
-	count := 0
+	var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
+	var nowStartPoint int64 = 0
+	var count int64 = 0
 	for {
-		jobQueue.list.PushBack([]int{count, nowStartPoint})
-		nowStartPoint = nowStartPoint + singleImageMaxSize
-		if nowStartPoint > data.Len() {
+		jobQueue.list.PushBack(count)
+		buffer := new(bytes.Buffer)
+		if nowStartPoint+singleImageMaxSize > int64(data.Len()) {
+			buffer.Write(data.Bytes()[nowStartPoint:data.Len()])
+			jobQueue.list.PushBack(buffer)
 			break
+		} else {
+			buffer.Write(data.Bytes()[nowStartPoint : nowStartPoint+singleImageMaxSize])
+			jobQueue.list.PushBack(buffer)
+			nowStartPoint = nowStartPoint + singleImageMaxSize
+			count++
 		}
-		count++
 	}
 	for i := 0; i < uploadThreads; i++ {
-		go UploadProcessFileThread(&safeNodeData, data, &jobQueue, &threadsWaitGroup)
+		go UploadProcessDataThread(&safeNodeData, &jobQueue, &threadsWaitGroup)
 		threadsWaitGroup.Add(1)
 	}
 	threadsWaitGroup.Wait()
@@ -670,9 +674,8 @@ func UploadFile(data *bytes.Buffer, name string) error { //上传文件到当前
 	}
 	Path[len(Path)-1] = []string{Path[len(Path)-1][0], lastNodeHash}
 
-	nodeData := make(map[string][]string)
 	for i := len(Path) - 2; i >= 0; i-- {
-		nodeData, err = DecodeNode(Path[i][1])
+		nodeData, err := DecodeNode(Path[i][1])
 		if err != nil {
 			runtime.GC()
 			return err
@@ -689,7 +692,7 @@ func UploadFile(data *bytes.Buffer, name string) error { //上传文件到当前
 	return nil
 }
 
-func DownloadProcessFileThread(writeMap *SafeDownloadMapStruct, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //下载文件的多线程处理
+func DownloadProcessDataThread(writeMap *SafeDownloadMapStruct, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //下载数据的多线程处理
 	for {
 		jobQueue.lock.Lock()
 		downloadData := jobQueue.list.Front()
@@ -708,7 +711,7 @@ func DownloadProcessFileThread(writeMap *SafeDownloadMapStruct, jobQueue *JobQue
 			if err != nil {
 				if errTimes <= retryTimes {
 					errTimes++
-					time.Sleep(time.Millisecond * 500)
+					time.Sleep(retryWaitTime)
 					runtime.GC()
 					continue
 				}
@@ -719,19 +722,19 @@ func DownloadProcessFileThread(writeMap *SafeDownloadMapStruct, jobQueue *JobQue
 			break
 		}
 
-		num, err := strconv.Atoi(downloadData.Value.([]string)[0])
+		num, err := strconv.ParseInt(downloadData.Value.([]string)[0], 10, 64)
 		if err != nil {
 			panic(err)
 		}
 
-		jobQueue.lock.Lock()
+		writeMap.lock.Lock()
 		writeMap.mapObj[num] = data.Bytes()
-		jobQueue.lock.Unlock()
+		writeMap.lock.Unlock()
 	}
 	threadsWaitGroup.Done()
 }
 
-func DownloadFile(filename string) (*bytes.Buffer, error) { //从当前文件夹下载文件
+func DownloadData(filename string) (*bytes.Buffer, error) { //从当前文件夹下载数据
 	if len(Path) == 0 {
 		runtime.GC()
 		return nil, NotSetARootNodeYet()
@@ -749,19 +752,20 @@ func DownloadFile(filename string) (*bytes.Buffer, error) { //从当前文件夹
 				runtime.GC()
 				return nil, err
 			}
-			writeMap := SafeDownloadMapStruct{new(sync.Mutex), make(map[int][]byte)}
+			writeMap := SafeDownloadMapStruct{new(sync.Mutex), make(map[int64][]byte)}
 			jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
 			var threadsWaitGroup sync.WaitGroup
 			for k, v := range fileNodeData {
 				jobQueue.list.PushBack([]string{k, v[0]})
 			}
 			for i := 0; i < downloadThreads; i++ {
-				go DownloadProcessFileThread(&writeMap, &jobQueue, &threadsWaitGroup)
+				go DownloadProcessDataThread(&writeMap, &jobQueue, &threadsWaitGroup)
 				threadsWaitGroup.Add(1)
 			}
 			threadsWaitGroup.Wait()
 			fileData := new(bytes.Buffer)
-			for i := 0; ; i++ {
+			var i int64
+			for i = 0; ; i++ {
 				if _, ok := writeMap.mapObj[i]; !ok {
 					break
 				}
@@ -776,6 +780,223 @@ func DownloadFile(filename string) (*bytes.Buffer, error) { //从当前文件夹
 	}
 	runtime.GC()
 	return nil, FileDoesNotExist()
+}
+
+func UploadProcessFileThread(nodeData *SafeUploadNodeStruct, file *os.File, fileLock *sync.Mutex, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //上传文件的多线程处理
+	for {
+		jobQueue.lock.Lock()
+		count := jobQueue.list.Front()
+		if count == nil {
+			jobQueue.lock.Unlock()
+			break
+		}
+		jobQueue.list.Remove(count)
+		jobQueue.lock.Unlock()
+
+		var imageHash string
+		var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
+		buffer := make([]byte, singleImageMaxSize)
+		errTimes := 0
+		for {
+			fileLock.Lock()
+			_, err := file.Seek(singleImageMaxSize*count.Value.(int64), io.SeekStart)
+			num, err := file.Read(buffer)
+			if err != nil {
+				runtime.GC()
+				panic(err)
+			}
+			fileLock.Unlock()
+			image, err := EncodeImage(bytes.NewBuffer(buffer[0:num]), fileImageWidth, fileImageMaxHeight)
+			imageHash, err = PushImage(image)
+			if err != nil {
+				if errTimes <= retryTimes {
+					errTimes++
+					time.Sleep(retryWaitTime)
+					runtime.GC()
+					continue
+				}
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
+			break
+		}
+		nodeData.lock.Lock()
+		nodeData.mapObj[strconv.FormatInt(count.Value.(int64), 10)] = []string{imageHash}
+		nodeData.lock.Unlock()
+	}
+	runtime.GC()
+	threadsWaitGroup.Done()
+}
+
+func UploadFile(file *os.File, name string) error { //上传文件到当前路径
+	if len(Path) == 0 {
+		runtime.GC()
+		return NotSetARootNodeYet()
+	}
+
+	floderNodeData, err := DecodeNode(Path[len(Path)-1][1])
+	if err != nil {
+		runtime.GC()
+		return err
+	}
+	if _, ok := floderNodeData[name]; ok {
+		runtime.GC()
+		return NameExisted()
+	}
+
+	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
+	jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
+	var threadsWaitGroup sync.WaitGroup
+	var fileLock sync.Mutex
+	var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
+	var nowStartPoint int64 = 0
+	var count int64 = 0
+	fileStat, err := file.Stat()
+	if err != nil {
+		runtime.GC()
+		return err
+	}
+	for {
+		jobQueue.list.PushBack(count)
+		if nowStartPoint+singleImageMaxSize > fileStat.Size() {
+			break
+		} else {
+			nowStartPoint = nowStartPoint + singleImageMaxSize
+			count++
+		}
+	}
+	for i := 0; i < uploadThreads; i++ {
+		go UploadProcessFileThread(&safeNodeData, file, &fileLock, &jobQueue, &threadsWaitGroup)
+		threadsWaitGroup.Add(1)
+	}
+	threadsWaitGroup.Wait()
+
+	hash, err := CreateNode(safeNodeData.mapObj)
+	if err != nil {
+		runtime.GC()
+		return err
+	}
+
+	floderNodeData[name] = []string{"1", hash, strconv.FormatInt(fileStat.Size(), 10)}
+	lastNodeHash, err := CreateNode(floderNodeData)
+	if err != nil {
+		runtime.GC()
+		return err
+	}
+	Path[len(Path)-1] = []string{Path[len(Path)-1][0], lastNodeHash}
+
+	for i := len(Path) - 2; i >= 0; i-- {
+		nodeData, err := DecodeNode(Path[i][1])
+		if err != nil {
+			runtime.GC()
+			return err
+		}
+		nodeData[Path[i+1][0]] = []string{"0", lastNodeHash}
+		lastNodeHash, err = CreateNode(nodeData)
+		if err != nil {
+			runtime.GC()
+			return err
+		}
+		Path[i] = []string{Path[len(Path)-1][0], lastNodeHash}
+	}
+	runtime.GC()
+	return nil
+}
+
+func DownloadProcessFileThread(file *os.File, fileLock *sync.Mutex, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //下载数据的多线程处理
+	for {
+		jobQueue.lock.Lock()
+		downloadData := jobQueue.list.Front()
+		if downloadData == nil {
+			jobQueue.lock.Unlock()
+			break
+		}
+		jobQueue.list.Remove(downloadData)
+		jobQueue.lock.Unlock()
+
+		var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
+		var data *bytes.Buffer
+		errTimes := 0
+		for {
+			imageData, err := GetImage(downloadData.Value.([]string)[1])
+			data, err = DecodeImage(imageData)
+			if err != nil {
+				if errTimes <= retryTimes {
+					errTimes++
+					time.Sleep(retryWaitTime)
+					runtime.GC()
+					continue
+				}
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
+			break
+		}
+
+		count, err := strconv.ParseInt(downloadData.Value.([]string)[0], 10, 64)
+		if err != nil {
+			runtime.GC()
+			panic(err)
+		}
+
+		fileLock.Lock()
+		_, err = file.Seek(singleImageMaxSize*count, io.SeekStart)
+		_, err = file.Write(data.Bytes())
+		if err != nil {
+			runtime.GC()
+			panic(err)
+		}
+		fileLock.Unlock()
+	}
+	threadsWaitGroup.Done()
+}
+
+func DownloadFile(filename string, file *os.File) (int64, error) { //从当前文件夹下载数据 (文件长度)
+	if len(Path) == 0 {
+		runtime.GC()
+		return 0, NotSetARootNodeYet()
+	}
+
+	nodeData, err := DecodeNode(Path[len(Path)-1][1])
+	if err != nil {
+		runtime.GC()
+		return 0, err
+	}
+	if folderNodeData, ok := nodeData[filename]; ok {
+		if folderNodeData[0] == "1" {
+			fileNodeData, err := DecodeNode(folderNodeData[1])
+			if err != nil {
+				runtime.GC()
+				return 0, err
+			}
+			jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
+			var threadsWaitGroup sync.WaitGroup
+			var fileLock sync.Mutex
+			fileSize, err := strconv.ParseInt(folderNodeData[2], 10, 64)
+			if err != nil {
+				runtime.GC()
+				return 0, err
+			}
+			file.Truncate(fileSize)
+			for k, v := range fileNodeData {
+				jobQueue.list.PushBack([]string{k, v[0]})
+			}
+			for i := 0; i < downloadThreads; i++ {
+				go DownloadProcessFileThread(file, &fileLock, &jobQueue, &threadsWaitGroup)
+				threadsWaitGroup.Add(1)
+			}
+			threadsWaitGroup.Wait()
+			runtime.GC()
+			return fileSize, nil
+		} else {
+			runtime.GC()
+			return 0, FileDoesNotExist()
+		}
+	}
+	runtime.GC()
+	return 0, FileDoesNotExist()
 }
 
 /*
