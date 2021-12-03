@@ -1,6 +1,9 @@
 package bilinetdrive
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 func PathSwitchDir(orginalPath string, relPath string) (string, error) { //绝对路径转相对路径 orginalPath:原有绝对路径
 	pathList := strings.Split(relPath, "/")
@@ -31,6 +34,12 @@ func PathSwitchDir(orginalPath string, relPath string) (string, error) { //绝�
 		}
 	}
 	return "/" + strings.Join(nowPathList, "/"), nil
+}
+
+func JoinPath(first string, second string) string {
+	path := filepath.Join(first, second)
+	pathList := strings.Split(path, "\\")
+	return strings.Join(pathList, "/")
 }
 
 func GetPathFileName(path string) string {

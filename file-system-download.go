@@ -77,26 +77,27 @@ func DownloadData(path string) (*bytes.Buffer, error) { //从当前文件夹下�
 	}
 
 	name := GetPathFileName(path)
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(GetPathFolder(path))
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return nil, err
 	}
 	nodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return nil, err
 	}
-	nodeRWLock.RUnlock()
+
 	if folderNodeData, ok := nodeData[name]; ok {
 		if folderNodeData[0] == "1" {
-			nodeRWLock.RLock()
+			TagFileUsing(path)
 			fileNodeData, err := DecodeNode(folderNodeData[1], false)
-			nodeRWLock.RUnlock()
+			nodeRWLock.Unlock()
 			if err != nil {
+				UntagFileUsing(path)
 				runtime.GC()
 				return nil, err
 			}
@@ -121,9 +122,11 @@ func DownloadData(path string) (*bytes.Buffer, error) { //从当前文件夹下�
 				}
 				fileData.Write(writeMap.mapObj[i])
 			}
+			UntagFileUsing(path)
 			runtime.GC()
 			return fileData, nil
 		} else {
+			nodeRWLock.Unlock()
 			runtime.GC()
 			return nil, FileDoesNotExist()
 		}
@@ -201,26 +204,27 @@ func DownloadFile(path string, file *os.File) (int64, error) { //从当前文件
 	}
 
 	name := GetPathFileName(path)
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(GetPathFolder(path))
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return 0, err
 	}
 	nodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return 0, err
 	}
-	nodeRWLock.RUnlock()
+
 	if folderNodeData, ok := nodeData[name]; ok {
 		if folderNodeData[0] == "1" {
-			nodeRWLock.RLock()
+			TagFileUsing(path)
 			fileNodeData, err := DecodeNode(folderNodeData[1], false)
-			nodeRWLock.RUnlock()
+			nodeRWLock.Unlock()
 			if err != nil {
+				UntagFileUsing(path)
 				runtime.GC()
 				return 0, err
 			}
@@ -229,11 +233,13 @@ func DownloadFile(path string, file *os.File) (int64, error) { //从当前文件
 			var fileLock sync.Mutex
 			blockSize, err := strconv.ParseInt(folderNodeData[3], 10, 64)
 			if err != nil {
+				UntagFileUsing(path)
 				runtime.GC()
 				return 0, err
 			}
 			fileSize, err := strconv.ParseInt(folderNodeData[2], 10, 64)
 			if err != nil {
+				UntagFileUsing(path)
 				runtime.GC()
 				return 0, err
 			}
@@ -247,9 +253,11 @@ func DownloadFile(path string, file *os.File) (int64, error) { //从当前文件
 				threadsWaitGroup.Add(1)
 			}
 			threadsWaitGroup.Wait()
+			UntagFileUsing(path)
 			runtime.GC()
 			return fileSize, nil
 		} else {
+			nodeRWLock.Unlock()
 			runtime.GC()
 			return 0, FileDoesNotExist()
 		}

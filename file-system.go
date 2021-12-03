@@ -14,6 +14,38 @@ type: 0是文件夹 1是文件
 
 //注意: 以下的path只能是绝对路径
 
+func IsFileUsing(path string) bool {
+	fileNowUsingListLock.Lock()
+	for v := fileNowUsingList.Front(); v != nil; v = v.Next() {
+		splitList := strings.Split(v.Value.(string), path)
+		if len(splitList) >= 2 {
+			if splitList[0] == "" {
+				fileNowUsingListLock.Unlock()
+				return true
+			}
+		}
+	}
+	fileNowUsingListLock.Unlock()
+	return false
+}
+
+func TagFileUsing(path string) {
+	fileNowUsingListLock.Lock()
+	fileNowUsingList.PushBack(path)
+	fileNowUsingListLock.Unlock()
+}
+
+func UntagFileUsing(path string) {
+	fileNowUsingListLock.Lock()
+	for v := fileNowUsingList.Front(); v != nil; v = v.Next() {
+		if v.Value.(string) == path {
+			fileNowUsingList.Remove(v)
+			break
+		}
+	}
+	fileNowUsingListLock.Unlock()
+}
+
 func GetTempPath(path string) ([][]string, error) { //获取内部path列表
 	if rootNodeHash == "" {
 		return nil, NotSetARootNodeYet()
@@ -55,13 +87,13 @@ func ListFile(path string) ([][]string, error) { //获取当前文件夹下所�
 		return nil, NotSetARootNodeYet()
 	}
 	var fileList [][]string
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(path)
 	if err != nil {
 		return nil, err
 	}
 	fileMap, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
-	nodeRWLock.RUnlock()
+	nodeRWLock.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +163,9 @@ func RemoveNode(path string) error { //删除一个文件或文件夹(rm) path:�
 		return NotSetARootNodeYet()
 	}
 
+	if IsFileUsing(path) {
+		return FileIsUsing()
+	}
 	name := GetPathFileName(path)
 	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(GetPathFolder(path))
@@ -182,6 +217,9 @@ func RenameNode(path string, origin string, name string) error { //重命名一�
 		return NotSetARootNodeYet()
 	}
 
+	if IsFileUsing(JoinPath(path, origin)) {
+		return FileIsUsing()
+	}
 	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(path)
 	if err != nil {
@@ -238,14 +276,14 @@ func GetFileLength(path string) (int64, error) { //获取文件大小 path:文�
 	}
 
 	name := GetPathFileName(path)
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(GetPathFolder(path))
 	if err != nil {
 		nodeRWLock.Unlock()
 		return 0, err
 	}
 	nodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
-	nodeRWLock.RUnlock()
+	nodeRWLock.Unlock()
 	if err != nil {
 		return 0, err
 	}

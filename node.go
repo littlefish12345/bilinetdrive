@@ -3,7 +3,6 @@ package bilinetdrive
 import (
 	"bytes"
 	"compress/gzip"
-	"container/list"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -81,9 +80,6 @@ func DecodeNode(hash string, doCache bool) (map[string][]string, error) { //解�
 }
 
 func CreateNode(nodeData map[string][]string, doCache bool) (string, error) { //编码一个节点
-	if nodeUploadJobList == nil {
-		nodeUploadJobList = list.New()
-	}
 	if nodeCache == nil {
 		nodeCache = make(map[string]*CacheNodeStruct)
 	}

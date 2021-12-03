@@ -16,23 +16,25 @@ const (
 )
 
 var (
-	uploadThreads   = 16
-	downloadThreads = 16
-	retryTimes      = 5
-	retryWaitTime   = time.Millisecond * 100
-	SESSDATA        = ""
-	rootNodeHash    = ""
-	UserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
-	httpClient      = http.Client{Timeout: time.Second * 5}
+	uploadThreads        = 16
+	downloadThreads      = 16
+	fileNowUsingList     = list.New()
+	fileNowUsingListLock sync.Mutex
+	retryTimes           = 5
+	retryWaitTime        = time.Millisecond * 100
+	SESSDATA             = ""
+	rootNodeHash         = ""
+	UserAgent            = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+	httpClient           = http.Client{Timeout: time.Second * 5}
 )
 
 var (
-	nodeRWLock              sync.RWMutex
+	nodeRWLock              sync.Mutex
 	nodeCache               map[string]*CacheNodeStruct
 	nodeCacheManagerStarted = false
 	nodeCacheStayTime       = 300 //s
 	nodeCacheScanTime       = time.Second * 1
-	nodeUploadJobList       *list.List
+	nodeUploadJobList       = list.New()
 	nodeUploadJobListLock   sync.Mutex
 	nodeUploadThreads       = 16
 )
@@ -82,7 +84,11 @@ func NodeDoesNotExist() error {
 }
 
 func NameExisted() error {
-	return errors.New("name Existed")
+	return errors.New("name Eexisted")
+}
+
+func FileIsUsing() error {
+	return errors.New("file is using")
 }
 
 func SetSESSDATA(sessdata string) { //要修改或上传必须要有SESSDATA

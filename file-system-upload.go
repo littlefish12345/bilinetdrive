@@ -72,25 +72,26 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 
 	name := GetPathFileName(path)
 	folderPath := GetPathFolder(path)
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(folderPath)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
 	floderNodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
-	nodeRWLock.RUnlock()
+	nodeRWLock.Unlock()
 	if _, ok := floderNodeData[name]; ok {
 		runtime.GC()
 		return NameExisted()
 	}
 
+	TagFileUsing(path)
 	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
 	jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
 	var threadsWaitGroup sync.WaitGroup
@@ -120,6 +121,7 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 	nodeRWLock.Lock()
 	hash, err := CreateNode(safeNodeData.mapObj, false)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -127,12 +129,14 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 
 	tempPath, err = GetTempPath(folderPath)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
 	floderNodeData, err = DecodeNode(tempPath[len(tempPath)-1][1], false)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -142,6 +146,7 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 	floderNodeData[name] = []string{"1", hash, strconv.Itoa(data.Len()), strconv.FormatInt(singleImageMaxSize, 10)}
 	lastNodeHash, err := CreateNode(floderNodeData, true)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -152,6 +157,7 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 		nodeData, err := DecodeNode(tempPath[i][1], false)
 		delete(nodeCache, tempPath[i][1])
 		if err != nil {
+			UntagFileUsing(path)
 			nodeRWLock.Unlock()
 			runtime.GC()
 			return err
@@ -159,6 +165,7 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 		nodeData[tempPath[i+1][0]] = []string{"0", lastNodeHash}
 		lastNodeHash, err = CreateNode(nodeData, true)
 		if err != nil {
+			UntagFileUsing(path)
 			nodeRWLock.Unlock()
 			runtime.GC()
 			return err
@@ -167,6 +174,7 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 	}
 	rootNodeHash = tempPath[0][1]
 	UploadNode()
+	UntagFileUsing(path)
 	nodeRWLock.Unlock()
 	runtime.GC()
 	return nil
@@ -235,25 +243,26 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 
 	name := GetPathFileName(path)
 	folderPath := GetPathFolder(path)
-	nodeRWLock.RLock()
+	nodeRWLock.Lock()
 	tempPath, err := GetTempPath(folderPath)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
 	floderNodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
 	if err != nil {
-		nodeRWLock.RUnlock()
+		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
-	nodeRWLock.RUnlock()
+	nodeRWLock.Unlock()
 	if _, ok := floderNodeData[name]; ok {
 		runtime.GC()
 		return NameExisted()
 	}
 
+	TagFileUsing(path)
 	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
 	jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
 	var threadsWaitGroup sync.WaitGroup
@@ -263,6 +272,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 	var count int64 = 0
 	fileStat, err := file.Stat()
 	if err != nil {
+		UntagFileUsing(path)
 		runtime.GC()
 		return err
 	}
@@ -284,6 +294,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 	nodeRWLock.Lock()
 	hash, err := CreateNode(safeNodeData.mapObj, false)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -291,12 +302,14 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 
 	tempPath, err = GetTempPath(folderPath)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
 	}
 	floderNodeData, err = DecodeNode(tempPath[len(tempPath)-1][1], false)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -306,6 +319,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 	floderNodeData[name] = []string{"1", hash, strconv.FormatInt(fileStat.Size(), 10), strconv.FormatInt(singleImageMaxSize, 10)}
 	lastNodeHash, err := CreateNode(floderNodeData, true)
 	if err != nil {
+		UntagFileUsing(path)
 		nodeRWLock.Unlock()
 		runtime.GC()
 		return err
@@ -316,6 +330,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 		nodeData, err := DecodeNode(tempPath[i][1], false)
 		delete(nodeCache, tempPath[i][1])
 		if err != nil {
+			UntagFileUsing(path)
 			nodeRWLock.Unlock()
 			runtime.GC()
 			return err
@@ -323,6 +338,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 		nodeData[tempPath[i+1][0]] = []string{"0", lastNodeHash}
 		lastNodeHash, err = CreateNode(nodeData, true)
 		if err != nil {
+			UntagFileUsing(path)
 			nodeRWLock.Unlock()
 			runtime.GC()
 			return err
@@ -331,6 +347,7 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 	}
 	rootNodeHash = tempPath[0][1]
 	UploadNode()
+	UntagFileUsing(path)
 	nodeRWLock.Unlock()
 	runtime.GC()
 	return nil
