@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/list"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -18,28 +19,37 @@ import (
 type: 0是文件夹 1是文件
 */
 
-//注意: 以下的path只能是绝对路径
+//注意: 以下的路径只能是绝对路径
 
-func UploadProcessDataThread(nodeData *SafeUploadNodeStruct, jobQueue *JobQueueStruct, threadsWaitGroup *sync.WaitGroup) { //上传数据的多线程处理
+func UploadProcessDataThread(fileData *bytes.Buffer, blockCount *int64, blockCountLock *sync.Mutex, singleImageMaxSize int64, nodeData *SafeUploadNodeStruct, threadsWaitGroup *sync.WaitGroup) { //上传数据的多线程处理
 	for {
-		jobQueue.lock.Lock()
-		count := jobQueue.list.Front()
-		if count == nil {
-			jobQueue.lock.Unlock()
-			break
-		}
-		jobQueue.list.Remove(count)
-		data := jobQueue.list.Front()
-		jobQueue.list.Remove(data)
-		jobQueue.lock.Unlock()
-
+		var image *bytes.Buffer
+		var err error
 		var imageHash string
+		stop := false
 		errTimes := 0
-		image, err := EncodeImage(data.Value.(*bytes.Buffer), fileImageWidth, fileImageMaxHeight)
-		if err != nil {
-			runtime.GC()
-			threadsWaitGroup.Done()
-			panic(err)
+		blockCountLock.Lock()
+		nowCount := *blockCount
+		*blockCount = *blockCount + 1
+		blockCountLock.Unlock()
+		if (nowCount+1)*singleImageMaxSize > int64(fileData.Len()) {
+			if nowCount*singleImageMaxSize > int64(fileData.Len()) {
+				break
+			}
+			image, err = EncodeImage(bytes.NewBuffer(fileData.Bytes()[nowCount*singleImageMaxSize:fileData.Len()]), fileImageWidth, fileImageMaxHeight)
+			if err != nil {
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
+			stop = true
+		} else {
+			image, err = EncodeImage(bytes.NewBuffer(fileData.Bytes()[nowCount*singleImageMaxSize:(nowCount+1)*singleImageMaxSize]), fileImageWidth, fileImageMaxHeight)
+			if err != nil {
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
 		}
 		for {
 			imageHash, err = PushImage(image)
@@ -57,14 +67,17 @@ func UploadProcessDataThread(nodeData *SafeUploadNodeStruct, jobQueue *JobQueueS
 			break
 		}
 		nodeData.lock.Lock()
-		nodeData.mapObj[strconv.FormatInt(count.Value.(int64), 10)] = []string{imageHash}
+		nodeData.mapObj[strconv.FormatInt(nowCount, 10)] = []string{imageHash}
 		nodeData.lock.Unlock()
+		if stop {
+			break
+		}
 	}
 	runtime.GC()
 	threadsWaitGroup.Done()
 }
 
-func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目标文件路径
+func UploadData(path string, data *bytes.Buffer) error { //上传数据 path:目标文件路径
 	if rootNodeHash == "" {
 		runtime.GC()
 		return NotSetARootNodeYet()
@@ -93,27 +106,12 @@ func UploadData(data *bytes.Buffer, path string) error { //上传数据 path:目
 
 	TagFileUsing(path)
 	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
-	jobQueue := JobQueueStruct{new(sync.Mutex), list.New()}
 	var threadsWaitGroup sync.WaitGroup
 	var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
-	var nowStartPoint int64 = 0
-	var count int64 = 0
-	for {
-		jobQueue.list.PushBack(count)
-		buffer := new(bytes.Buffer)
-		if nowStartPoint+singleImageMaxSize > int64(data.Len()) {
-			buffer.Write(data.Bytes()[nowStartPoint:data.Len()])
-			jobQueue.list.PushBack(buffer)
-			break
-		} else {
-			buffer.Write(data.Bytes()[nowStartPoint : nowStartPoint+singleImageMaxSize])
-			jobQueue.list.PushBack(buffer)
-			nowStartPoint = nowStartPoint + singleImageMaxSize
-			count++
-		}
-	}
+	var blockCountLock sync.Mutex
+	var blockCount int64 = 0
 	for i := 0; i < uploadThreads; i++ {
-		go UploadProcessDataThread(&safeNodeData, &jobQueue, &threadsWaitGroup)
+		go UploadProcessDataThread(data, &blockCount, &blockCountLock, singleImageMaxSize, &safeNodeData, &threadsWaitGroup)
 		threadsWaitGroup.Add(1)
 	}
 	threadsWaitGroup.Wait()
@@ -317,6 +315,169 @@ func UploadFile(file *os.File, path string) error { //上传文件 path:目标�
 
 	delete(nodeCache, tempPath[len(tempPath)-1][1])
 	floderNodeData[name] = []string{"1", hash, strconv.FormatInt(fileStat.Size(), 10), strconv.FormatInt(singleImageMaxSize, 10)}
+	lastNodeHash, err := CreateNode(floderNodeData, true)
+	if err != nil {
+		UntagFileUsing(path)
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+	tempPath[len(tempPath)-1] = []string{tempPath[len(tempPath)-1][0], lastNodeHash}
+
+	for i := len(tempPath) - 2; i >= 0; i-- {
+		nodeData, err := DecodeNode(tempPath[i][1], false)
+		delete(nodeCache, tempPath[i][1])
+		if err != nil {
+			UntagFileUsing(path)
+			nodeRWLock.Unlock()
+			runtime.GC()
+			return err
+		}
+		nodeData[tempPath[i+1][0]] = []string{"0", lastNodeHash}
+		lastNodeHash, err = CreateNode(nodeData, true)
+		if err != nil {
+			UntagFileUsing(path)
+			nodeRWLock.Unlock()
+			runtime.GC()
+			return err
+		}
+		tempPath[i] = []string{tempPath[i][0], lastNodeHash}
+	}
+	rootNodeHash = tempPath[0][1]
+	UploadNode()
+	UntagFileUsing(path)
+	nodeRWLock.Unlock()
+	runtime.GC()
+	return nil
+}
+
+func UploadProcessSocketThread(conn *net.Conn, fileLength int64, blockCount *int64, blockCountLock *sync.Mutex, singleImageMaxSize int64, nodeData *SafeUploadNodeStruct, threadsWaitGroup *sync.WaitGroup) { //上传数据的多线程处理
+	for {
+		var image *bytes.Buffer
+		var err error
+		var imageHash string
+		stop := false
+		errTimes := 0
+		var buffer []byte
+		blockCountLock.Lock()
+		nowBlock := *blockCount
+		*blockCount = *blockCount + 1
+		if (nowBlock+1)*singleImageMaxSize > int64(fileLength) {
+			if nowBlock*singleImageMaxSize > int64(fileLength) {
+				break
+			}
+			buffer = make([]byte, fileLength-nowBlock*singleImageMaxSize)
+		} else {
+			buffer = make([]byte, singleImageMaxSize)
+		}
+
+		_, err = (*conn).Read(buffer)
+		if err != nil && err != io.EOF {
+			runtime.GC()
+			threadsWaitGroup.Done()
+			panic(err)
+		}
+		blockCountLock.Unlock()
+
+		image, err = EncodeImage(bytes.NewBuffer(buffer), fileImageWidth, fileImageMaxHeight)
+		if err != nil {
+			runtime.GC()
+			threadsWaitGroup.Done()
+			panic(err)
+		}
+		stop = true
+
+		for {
+			imageHash, err = PushImage(image)
+			if err != nil {
+				if errTimes <= retryTimes {
+					errTimes++
+					time.Sleep(retryWaitTime)
+					runtime.GC()
+					continue
+				}
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
+			break
+		}
+		nodeData.lock.Lock()
+		nodeData.mapObj[strconv.FormatInt(nowBlock, 10)] = []string{imageHash}
+		nodeData.lock.Unlock()
+		if stop {
+			break
+		}
+	}
+	runtime.GC()
+	threadsWaitGroup.Done()
+}
+
+func UploadDataFromSocket(path string, conn *net.Conn, fileLength int64) error { //上传数据 path:目标文件路径
+	if rootNodeHash == "" {
+		runtime.GC()
+		return NotSetARootNodeYet()
+	}
+
+	name := GetPathFileName(path)
+	folderPath := GetPathFolder(path)
+	nodeRWLock.Lock()
+	tempPath, err := GetTempPath(folderPath)
+	if err != nil {
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+	floderNodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
+	if err != nil {
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+	nodeRWLock.Unlock()
+	if _, ok := floderNodeData[name]; ok {
+		runtime.GC()
+		return NameExisted()
+	}
+
+	TagFileUsing(path)
+	safeNodeData := SafeUploadNodeStruct{new(sync.Mutex), make(map[string][]string)}
+	var threadsWaitGroup sync.WaitGroup
+	var singleImageMaxSize int64 = (int64(fileImageWidth)*int64(fileImageMaxHeight) - 1) * 4
+	var blockCountLock sync.Mutex
+	var blockCount int64 = 0
+	for i := 0; i < uploadThreads; i++ {
+		go UploadProcessSocketThread(conn, fileLength, &blockCount, &blockCountLock, singleImageMaxSize, &safeNodeData, &threadsWaitGroup)
+		threadsWaitGroup.Add(1)
+	}
+	threadsWaitGroup.Wait()
+
+	nodeRWLock.Lock()
+	hash, err := CreateNode(safeNodeData.mapObj, false)
+	if err != nil {
+		UntagFileUsing(path)
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+
+	tempPath, err = GetTempPath(folderPath)
+	if err != nil {
+		UntagFileUsing(path)
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+	floderNodeData, err = DecodeNode(tempPath[len(tempPath)-1][1], false)
+	if err != nil {
+		UntagFileUsing(path)
+		nodeRWLock.Unlock()
+		runtime.GC()
+		return err
+	}
+
+	delete(nodeCache, tempPath[len(tempPath)-1][1])
+	floderNodeData[name] = []string{"1", hash, strconv.FormatInt(fileLength, 10), strconv.FormatInt(singleImageMaxSize, 10)}
 	lastNodeHash, err := CreateNode(floderNodeData, true)
 	if err != nil {
 		UntagFileUsing(path)

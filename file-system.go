@@ -12,7 +12,7 @@ import (
 type: 0是文件夹 1是文件
 */
 
-//注意: 以下的path只能是绝对路径
+//注意: 以下的路径只能是绝对路径
 
 func IsFileUsing(path string) bool {
 	fileNowUsingListLock.Lock()
@@ -52,6 +52,9 @@ func GetTempPath(path string) ([][]string, error) { //获取内部path列表
 	}
 
 	pathList := strings.Split(path, "/")
+	if pathList[len(pathList)-1] == "" && len(pathList) >= 3 {
+		pathList = pathList[:len(pathList)-1]
+	}
 	pathList = pathList[1:]
 	tempPath := [][]string{{"root", rootNodeHash}}
 	var hash string
@@ -212,59 +215,177 @@ func RemoveNode(path string) error { //删除一个文件或文件夹(rm) path:�
 	return nil
 }
 
-func RenameNode(path string, origin string, name string) error { //重命名一个文件或文件夹 path:这个文件或文件夹所在的路径 origin:原名 name:新名
+func MoveNode(originPath string, targetPath string) error { //移动一个文件或文件夹(mv) originPath:原路径 targetPath:新路径
 	if rootNodeHash == "" {
 		return NotSetARootNodeYet()
 	}
 
-	if IsFileUsing(JoinPath(path, origin)) {
+	if IsFileUsing(originPath) {
 		return FileIsUsing()
 	}
+	originFileName := GetPathFileName(originPath)
+	targetFileName := GetPathFileName(targetPath)
 	nodeRWLock.Lock()
-	tempPath, err := GetTempPath(path)
+	originTempPath, err := GetTempPath(GetPathFolder(originPath))
 	if err != nil {
 		nodeRWLock.Unlock()
 		return err
 	}
-	nodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], false)
+	originNodeData, err := DecodeNode(originTempPath[len(originTempPath)-1][1], false)
 	if err != nil {
 		nodeRWLock.Unlock()
 		return err
 	}
-	if _, ok := nodeData[origin]; !ok {
+	if _, ok := originNodeData[originFileName]; !ok {
 		nodeRWLock.Unlock()
 		return NodeDoesNotExist()
 	}
-	if _, ok := nodeData[name]; ok {
-		nodeRWLock.Unlock()
-		return NameExisted()
-	}
-	delete(nodeCache, tempPath[len(tempPath)-1][1])
-	nodeData[name] = nodeData[origin]
-	delete(nodeData, origin)
-	lastNodeHash, err := CreateNode(nodeData, true)
+
+	targetTempPath, err := GetTempPath(GetPathFolder(targetPath))
 	if err != nil {
 		nodeRWLock.Unlock()
 		return err
 	}
-	tempPath[len(tempPath)-1] = []string{tempPath[len(tempPath)-1][0], lastNodeHash}
-
-	for i := len(tempPath) - 2; i >= 0; i-- {
-		nodeData, err = DecodeNode(tempPath[i][1], false)
-		delete(nodeCache, tempPath[i][1])
-		if err != nil {
-			nodeRWLock.Unlock()
-			return err
-		}
-		nodeData[tempPath[i+1][0]] = []string{"0", lastNodeHash}
-		lastNodeHash, err = CreateNode(nodeData, true)
-		if err != nil {
-			nodeRWLock.Unlock()
-			return err
-		}
-		tempPath[i] = []string{tempPath[i][0], lastNodeHash}
+	targetNodeData, err := DecodeNode(targetTempPath[len(targetTempPath)-1][1], false)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
 	}
-	rootNodeHash = tempPath[0][1]
+	if _, ok := targetNodeData[targetFileName]; ok {
+		nodeRWLock.Unlock()
+		return NameExisted()
+	}
+	delete(nodeCache, originTempPath[len(originTempPath)-1][1])
+	delete(nodeCache, targetTempPath[len(targetTempPath)-1][1])
+	targetNodeData[targetFileName] = originNodeData[originFileName]
+
+	lastNodeHash, err := CreateNode(targetNodeData, true)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	targetTempPath[len(targetTempPath)-1] = []string{targetTempPath[len(targetTempPath)-1][0], lastNodeHash}
+	for i := len(targetTempPath) - 2; i >= 0; i-- {
+		targetNodeData, err = DecodeNode(targetTempPath[i][1], false)
+		delete(nodeCache, targetTempPath[i][1])
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		targetNodeData[targetTempPath[i+1][0]] = []string{"0", lastNodeHash}
+		lastNodeHash, err = CreateNode(targetNodeData, true)
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		targetTempPath[i] = []string{targetTempPath[i][0], lastNodeHash}
+	}
+	rootNodeHash = targetTempPath[0][1]
+
+	originTempPath, err = GetTempPath(GetPathFolder(originPath))
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	originNodeData, err = DecodeNode(originTempPath[len(originTempPath)-1][1], false)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	delete(originNodeData, originFileName)
+
+	lastNodeHash, err = CreateNode(originNodeData, true)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	originTempPath[len(originTempPath)-1] = []string{originTempPath[len(originTempPath)-1][0], lastNodeHash}
+	for i := len(originTempPath) - 2; i >= 0; i-- {
+		originNodeData, err = DecodeNode(originTempPath[i][1], false)
+		delete(nodeCache, originTempPath[i][1])
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		originNodeData[originTempPath[i+1][0]] = []string{"0", lastNodeHash}
+		lastNodeHash, err = CreateNode(originNodeData, true)
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		originTempPath[i] = []string{originTempPath[i][0], lastNodeHash}
+	}
+	rootNodeHash = originTempPath[0][1]
+	UploadNode()
+	nodeRWLock.Unlock()
+	return nil
+}
+
+func CopyNode(originPath string, targetPath string) error { //复制一个文件或文件夹(cp) originPath:原路径 targetPath:新路径
+	if rootNodeHash == "" {
+		return NotSetARootNodeYet()
+	}
+
+	if IsFileUsing(originPath) {
+		return FileIsUsing()
+	}
+	originFileName := GetPathFileName(originPath)
+	targetFileName := GetPathFileName(targetPath)
+	nodeRWLock.Lock()
+	originTempPath, err := GetTempPath(GetPathFolder(originPath))
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	originNodeData, err := DecodeNode(originTempPath[len(originTempPath)-1][1], false)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	if _, ok := originNodeData[originFileName]; !ok {
+		nodeRWLock.Unlock()
+		return NodeDoesNotExist()
+	}
+
+	targetTempPath, err := GetTempPath(GetPathFolder(targetPath))
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	targetNodeData, err := DecodeNode(targetTempPath[len(targetTempPath)-1][1], false)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	if _, ok := targetNodeData[targetFileName]; ok {
+		nodeRWLock.Unlock()
+		return NameExisted()
+	}
+	delete(nodeCache, targetTempPath[len(targetTempPath)-1][1])
+	targetNodeData[targetFileName] = originNodeData[originFileName]
+
+	lastNodeHash, err := CreateNode(targetNodeData, true)
+	if err != nil {
+		nodeRWLock.Unlock()
+		return err
+	}
+	targetTempPath[len(targetTempPath)-1] = []string{targetTempPath[len(targetTempPath)-1][0], lastNodeHash}
+	for i := len(targetTempPath) - 2; i >= 0; i-- {
+		targetNodeData, err = DecodeNode(targetTempPath[i][1], false)
+		delete(nodeCache, targetTempPath[i][1])
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		targetNodeData[targetTempPath[i+1][0]] = []string{"0", lastNodeHash}
+		lastNodeHash, err = CreateNode(targetNodeData, true)
+		if err != nil {
+			nodeRWLock.Unlock()
+			return err
+		}
+		targetTempPath[i] = []string{targetTempPath[i][0], lastNodeHash}
+	}
+	rootNodeHash = targetTempPath[0][1]
 	UploadNode()
 	nodeRWLock.Unlock()
 	return nil

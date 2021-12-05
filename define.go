@@ -44,11 +44,6 @@ type JobQueueStruct struct {
 	list *list.List
 }
 
-type SafeDownloadMapStruct struct {
-	lock   *sync.Mutex
-	mapObj map[int64][]byte
-}
-
 type SafeUploadNodeStruct struct {
 	lock   *sync.Mutex
 	mapObj map[string][]string
@@ -84,7 +79,7 @@ func NodeDoesNotExist() error {
 }
 
 func NameExisted() error {
-	return errors.New("name Eexisted")
+	return errors.New("name Existed")
 }
 
 func FileIsUsing() error {
