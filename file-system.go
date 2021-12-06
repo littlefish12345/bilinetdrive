@@ -85,6 +85,32 @@ func GetTempPath(path string) ([][]string, error) { //获取内部path列表
 	return tempPath, nil
 }
 
+func DoesNodeExist(path string) (bool, string, error) { //查看节点是否存在 path:要查询的路径 返回值:是否存在, node类型
+	if rootNodeHash == "" {
+		return false, "", NotSetARootNodeYet()
+	}
+	if path == "/" {
+		return true, "0", nil
+	}
+
+	nodeRWLock.Lock()
+	tempPath, err := GetTempPath(GetPathFolder(path))
+	if err != nil {
+		nodeRWLock.Unlock()
+		return false, "", err
+	}
+	nodeData, err := DecodeNode(tempPath[len(tempPath)-1][1], true)
+	nodeRWLock.Unlock()
+	if err != nil {
+		return false, "", err
+	}
+
+	if fileData, ok := nodeData[GetPathFileName(path)]; ok {
+		return true, fileData[0], nil
+	}
+	return false, "", nil
+}
+
 func ListFile(path string) ([][]string, error) { //获取当前文件夹下所有东西(ls) path:要获取的路径 返回值:[[文件名,node类型], ...]
 	if rootNodeHash == "" {
 		return nil, NotSetARootNodeYet()

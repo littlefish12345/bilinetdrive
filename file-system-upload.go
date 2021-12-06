@@ -358,24 +358,32 @@ func UploadProcessSocketThread(conn *net.Conn, fileLength int64, blockCount *int
 		var imageHash string
 		stop := false
 		errTimes := 0
-		var buffer []byte
 		blockCountLock.Lock()
 		nowBlock := *blockCount
 		*blockCount = *blockCount + 1
+		var recvSize int64 = 0
 		if (nowBlock+1)*singleImageMaxSize > int64(fileLength) {
 			if nowBlock*singleImageMaxSize > int64(fileLength) {
 				break
 			}
-			buffer = make([]byte, fileLength-nowBlock*singleImageMaxSize)
+			recvSize = fileLength - nowBlock*singleImageMaxSize
 		} else {
-			buffer = make([]byte, singleImageMaxSize)
+			recvSize = singleImageMaxSize
 		}
+		buffer := make([]byte, recvSize)
 
-		_, err = (*conn).Read(buffer)
-		if err != nil && err != io.EOF {
-			runtime.GC()
-			threadsWaitGroup.Done()
-			panic(err)
+		var totalBytes int64 = 0
+		for {
+			num, err := (*conn).Read(buffer[totalBytes:recvSize])
+			if err != nil && err != io.EOF {
+				runtime.GC()
+				threadsWaitGroup.Done()
+				panic(err)
+			}
+			totalBytes = totalBytes + int64(num)
+			if totalBytes == recvSize {
+				break
+			}
 		}
 		blockCountLock.Unlock()
 
